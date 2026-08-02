@@ -1,0 +1,5 @@
+#!/bin/dash
+touch .svc/.reference/logs/commits
+
+tac ".svc/.reference/logs/commits"
+

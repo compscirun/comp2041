@@ -1,0 +1,150 @@
+#!/bin/dash
+
+# Check if repo exists
+
+if [ ! -d ".svc" ]; then
+    echo "svc-add: error: svc repository directory .svc not found"
+    exit 1;
+fi
+INDEX_FILE="./.svc/.reference/index"
+# Get the directory where the script is located
+SCRIPT_DIR=$(dirname "$0")
+. "$SCRIPT_DIR/svc-helper.sh"
+
+add_object() {
+    FILE="$1"
+
+    TMP=$(mktemp)
+
+    cat "$FILE" > "$TMP"
+
+    HASH=$(hash_object "$FILE")
+
+    DIR=$(echo "$HASH" | cut -c 1-2)
+    OBJ=$(echo "$HASH" | cut -c 3-)
+
+    mkdir -p "./.svc/.reference/objects/$DIR"
+    OBJECT_PATH="./.svc/.reference/objects/$DIR/$OBJ"
+
+    gzip -c "$TMP" > "$OBJECT_PATH"
+    rm "$TMP"
+
+    echo "$HASH"
+}
+
+init_index() {
+    mkdir -p "./.svc/.reference"
+
+    {
+        echo "DIRC"
+        echo "count: 0"
+    } > "$INDEX_FILE"
+}
+
+add_file_to_index() {
+    TMP=$(mktemp)
+
+    filepath="$1"
+    filehash=$(add_object "$filepath")
+
+    ctime=$(stat -c "%.Z" "$filepath")
+    mtime=$(stat -c "%.Y" "$filepath")
+
+    echo "file|$filepath|$mtime|$ctime|$filehash" > "$TMP"
+    
+    if grep -qE "^file\|$filepath" "$INDEX_FILE"; then
+
+        old_hash=$(grep -F "file|$filepath" "$INDEX_FILE" | cut -d'|' -f5)
+
+        if [ "$old_hash" != "$filehash" ]; then
+
+            IDX_TMP=$(mktemp)
+            grep -vF "file|$filepath|" "$INDEX_FILE" > "$IDX_TMP"
+            mv "$IDX_TMP" "$INDEX_FILE"
+
+            cat "$TMP" >> "$INDEX_FILE"
+        fi
+    else 
+        cat "$TMP" >> "$INDEX_FILE"
+    fi
+
+    rm -f "$TMP"
+}
+
+update_index_count () {
+    count=$(tail -n +3 "$INDEX_FILE" | wc -l)
+    sed -i "2s/.*/count: $count/" "$INDEX_FILE"
+}
+
+sort_index () {
+    SORT_TMP=$(mktemp)
+    head -n 2 "$INDEX_FILE" > "$SORT_TMP"
+    tail -n +3 "$INDEX_FILE" | sort -t'|' -k2,2 >> "$SORT_TMP"
+
+    mv "$SORT_TMP" "$INDEX_FILE"
+
+    rm -f "$SORT_TMP"
+}
+
+
+# Check if index already exists
+if [ ! -f "$INDEX_FILE" ] || [ "$(dd if="$INDEX_FILE" bs=4 count=1 2>/dev/null)" != "DIRC" ]; then
+    init_index "$@"
+fi
+
+LIST_TMP=$(mktemp)
+for item in "$@"; do 
+
+    if [ "$(check_filename "$item")" = 0 ]; then
+        echo "svc-add: error: invalid filename $item"
+        exit 1;
+    fi
+    if [ ! -e "$item" ]; then
+        if [ "$(check_in_index "$INDEX_FILE" "$item")" -eq 1 ]; then
+            TMP_INDEX=$(mktemp)
+            head -n 2 "$INDEX_FILE" > "$TMP_INDEX"
+
+            tail -n +3 "$INDEX_FILE" | grep -vF "file|$item|" >> "$TMP_INDEX"
+            mv "$TMP_INDEX" "$INDEX_FILE"
+            count=$(tail -n +3 "$INDEX_FILE" | wc -l)
+            sed -i "2s/.*/count: $count/" "$INDEX_FILE"
+            continue
+        else
+            echo "svc-add: error: can not open '$item'" 
+            exit 1;
+        fi
+    fi
+
+    find "$item" -type f | while read -r filepath; do
+        [ "$filepath" = "./$INDEX_FILE" ] && continue
+        [ "$filepath" = "$INDEX_FILE" ] && continue
+
+        echo "$filepath" >> "$LIST_TMP"
+    done
+done
+
+if [ ! -s "$LIST_TMP" ]; then
+    num_files_adding=0
+else
+    num_files_adding=$(wc -l < "$LIST_TMP")
+fi
+
+if [ "$num_files_adding" -gt 0 ]; then
+
+    while IFS= read -r filepath; do
+    
+        add_file_to_index "$filepath" >> "$INDEX_FILE"
+
+
+    done < "$LIST_TMP"
+    
+fi
+
+update_index_count
+sort_index
+
+rm -f "$LIST_TMP"
+
+
+
+

@@ -1,0 +1,126 @@
+#!/bin/dash
+
+if [ ! -d ".svc" ]; then
+    echo "svc-rm: error: svc repository directory .svc not found" >&2
+    exit 1
+fi
+
+SCRIPT_DIR=$(dirname "$0")
+. "$SCRIPT_DIR/svc-helper.sh"
+
+INDEX_FILE_DIR="./.svc/.reference/index"
+COMMIT_INDEX="./.svc/.reference/objects/commits/index"
+
+CACHED=0
+FORCE=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            shift
+            ;;
+        --cached)
+            CACHED=1
+            shift
+            ;;
+        -*)
+            echo "usage: svc-rm [--force] [--cached] filenames..." >&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ $# -eq 0 ]; then
+    echo "usage: svc-rm [--force] [--cached] filenames" >&2
+    exit 1
+fi
+
+FILES_TO_REMOVE=$(mktemp)
+has_errors=0
+
+for item in "$@"; do
+
+    if [ "$has_errors" -eq 1 ]; then
+        continue
+    fi
+    
+    INDEX_FILE=""
+    INDEX_FILE=$(grep -F "file|$item|" "$INDEX_FILE_DIR")
+
+    REPO_FILE=""
+    if [ -f "$COMMIT_INDEX" ] && [ -s "$COMMIT_INDEX" ]; then
+        LAST_COMMIT_NUMBER=$(tail -n +2 "$COMMIT_INDEX" | wc -l)
+        LAST_COMMIT="./.svc/.reference/objects/commits/$LAST_COMMIT_NUMBER"
+        if [ -f "$LAST_COMMIT" ]; then
+            REPO_FILE=$(grep -F "file|$item|" "$LAST_COMMIT")
+        fi
+    fi
+
+    WORKSPACE_FILE=""
+    if [ -f "$item" ]; then
+        filehash=$(hash_object "$item")
+        ctime=$(stat -c "%.Z" "$item")
+        mtime=$(stat -c "%.Y" "$item")
+        WORKSPACE_FILE="file|$item|$mtime|$ctime|$filehash"
+    fi
+
+    if [ -z "$INDEX_FILE" ]; then
+        echo "svc-rm: error: '$item' is not in the svc repository"
+        has_errors=1
+        continue
+    fi
+
+    if [ "$FORCE" -eq 0 ]; then
+        if [ "$INDEX_FILE" = "$WORKSPACE_FILE" ]; then
+            if [ "$INDEX_FILE" != "$REPO_FILE" ]; then
+                if [ "$CACHED" -eq 0 ]; then
+                    echo "svc-rm: error: '$item' has staged changes in the index"
+                    has_errors=1
+                fi
+            fi
+        else 
+            if [ "$INDEX_FILE" = "$REPO_FILE" ]; then
+                if [ "$CACHED" -eq 0 ]; then
+                    echo "svc-rm: error: '$item' in the repository is different to the working file"
+                    has_errors=1
+                fi
+            else 
+                echo "svc-rm: error: '$item' in index is different to both the working file and the repository"
+                has_errors=1
+            fi
+        fi
+    fi
+
+    if [ "$has_errors" -eq 0 ]; then
+        echo "$item" >> "$FILES_TO_REMOVE"
+    fi
+
+
+done
+
+if [ "$has_errors" -eq 1 ]; then
+    rm -f "$FILES_TO_REMOVE"
+    exit 1
+fi
+
+if [ -s "$FILES_TO_REMOVE" ]; then
+    while IFS= read -r item; do
+        TMP_INDEX=$(mktemp)
+        grep -vF "file|$item|" "$INDEX_FILE_DIR" > "$TMP_INDEX"
+        mv "$TMP_INDEX" "$INDEX_FILE_DIR"
+    
+    if [ "$CACHED" -eq 0 ] && [ -f "$item" ]; then
+        rm -f "$item"
+    fi
+
+    done < "$FILES_TO_REMOVE"
+    
+fi
+
+new_count=$(tail -n +3 "$INDEX_FILE_DIR" | wc -l)
+sed -i "2s/.*/count: $new_count/" "$INDEX_FILE_DIR"
+rm -f "$FILES_TO_REMOVE"

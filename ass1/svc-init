@@ -1,0 +1,19 @@
+#!/bin/dash
+
+if [ -d ".svc" ]; then
+    echo "svc-init: error: .svc already exists"
+    exit 1
+fi
+
+mkdir -p ./.svc/.reference
+mkdir -p ./.svc/.reference/objects
+mkdir -p ./.svc/.reference/refs
+mkdir -p ./.svc/.reference/logs
+mkdir -p ./.svc/.reference/
+touch ./.svc/.reference/index
+echo "Initialized empty svc repository in .svc"
+exit 0;
+
+
+
+

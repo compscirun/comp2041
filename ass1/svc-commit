@@ -1,0 +1,143 @@
+#!/bin/dash
+# Commits all files listed in the index
+
+
+SCRIPT_DIR=$(dirname "$0")
+. "$SCRIPT_DIR/svc-helper.sh"
+
+commit_init () {
+    mkdir -p .svc/.reference/objects/commits
+    touch .svc/.reference/objects/commits/index
+}
+
+log_commit () {
+    touch ".svc/.reference/logs/commits"
+    COMMIT_LOG=".svc/.reference/logs/commits"
+    echo "$1" >> "$COMMIT_LOG"
+}
+
+
+COMMIT_DIR=".svc/.reference/objects/commits"
+
+if [ ! -d $COMMIT_DIR ]; then
+    commit_init
+fi
+
+touch "$COMMIT_DIR/index"
+COMMIT_INDEX="$COMMIT_DIR/index"
+
+commit() {
+    MESSAGE="$1"
+    COMMIT_ALL="$2"
+    INDEX_FILE=".svc/.reference/index"
+
+    if [ ! -f "$INDEX_FILE" ]; then
+        echo "nothing to commit"
+        return
+    fi
+
+    if [ "$COMMIT_ALL" -eq 1 ]; then
+        # Check all files in index
+        # add files
+        # then commit
+        TMP_INDEX=$(mktemp)
+        head -n 2 "$INDEX_FILE" > "$TMP_INDEX"
+
+        tail -n +3 "$INDEX_FILE" | while IFS='|' read -r type filepath mtime ctime old_hash; do
+            if [ -f "$filepath" ]; then
+                new_hash=$(hash_object "$filepath")
+                new_mtime=$(stat -c "%.Y" "$filepath")
+                new_ctime=$(stat -c "%.X" "$filepath")
+                DIR=$(echo "$new_hash" | cut -c 1-2)
+                OBJ=$(echo "$new_hash" | cut -c 3-)
+                mkdir -p ".svc/.reference/objects/$DIR"
+
+                if [ ! -f ".svc/.reference/objects/$DIR/$OBJ" ]; then
+                    gzip -c "$filepath" > ".svc/.reference/objects/$DIR/$OBJ"
+                fi
+
+                echo "file|$filepath|$new_mtime|$new_ctime|$new_hash" >> "$TMP_INDEX"
+            else
+                continue
+            fi
+        done
+    
+        SORT_TMP=$(mktemp)
+        head -n 2 "$TMP_INDEX" > "$SORT_TMP"
+        tail -n +3 "$TMP_INDEX" | sort -t'|' -k2,2 >> "$SORT_TMP"
+        mv "$SORT_TMP" "$INDEX_FILE"
+        rm -f "$TMP_INDEX"
+        
+        count=$(tail -n +3 "$INDEX_FILE" | wc -l)
+        sed -i "2s/.*/count: $count/" "$INDEX_FILE"
+    fi
+
+    COMMIT_NUMBER=$(($(tail -n +1 "$COMMIT_INDEX" | wc -l)))
+    
+    touch "$INDEX_FILE"
+    FILE_COUNT=$(($(tail -n +2 "$INDEX_FILE" | wc -l) + 1))
+
+    
+
+    if [ "$COMMIT_NUMBER" -gt 0 ]; then
+        LAST_COMMIT=$(expr $COMMIT_NUMBER - 1)
+        LAST_COMMIT_FILE="$COMMIT_DIR/$LAST_COMMIT"
+
+        LAST_COMMIT_TMP=$(mktemp)
+        COMMIT_TMP=$(mktemp)
+
+        cut -d'|' "$INDEX_FILE" -f5 > "$COMMIT_TMP"
+        cut -d'|' "$LAST_COMMIT_FILE" -f5 > "$LAST_COMMIT_TMP"
+        if [ $(compare_hash "$COMMIT_TMP" "$LAST_COMMIT_TMP") -eq 1 ]; then
+            touch "$COMMIT_DIR/$COMMIT_NUMBER"
+            COMMIT_FILE="$COMMIT_DIR/$COMMIT_NUMBER"
+            cat "$INDEX_FILE" > "$COMMIT_FILE"
+            echo "Committed as commit $COMMIT_NUMBER"
+            log_commit "$COMMIT_NUMBER $MESSAGE"
+            COMMIT_ENTRY="Commit $COMMIT_NUMBER: Message:$MESSAGE "
+            echo "$COMMIT_ENTRY" >> "$COMMIT_INDEX"
+        else
+            echo "nothing to commit"
+        fi
+
+        rm -f "$LAST_COMMIT_TMP" "$COMMIT_TMP"
+    else 
+        touch "$COMMIT_DIR/$COMMIT_NUMBER"
+        COMMIT_FILE="$COMMIT_DIR/$COMMIT_NUMBER"
+        cat "$INDEX_FILE" > "$COMMIT_FILE"
+        echo "Committed as commit $COMMIT_NUMBER"
+        log_commit "$COMMIT_NUMBER $MESSAGE"
+        COMMIT_ENTRY="Commit $COMMIT_NUMBER: Message:$MESSAGE "
+        echo "$COMMIT_ENTRY" >> "$COMMIT_INDEX"
+    fi
+}
+
+DO_ALL=0
+COMMIT_MSG=""
+
+while getopts "am:" opt; do
+    case "$opt" in
+        a)
+            DO_ALL=1
+            ;;
+        m)
+            COMMIT_MSG="$OPTARG"
+            ;;
+        *)
+            echo "usage: svc-commit [-a] -m commit-message" >&2
+            exit 1
+            ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+if [ -z "$COMMIT_MSG" ]; then
+    echo "usage: svc-commit [-a] -m commit-message" >&2
+    exit 1
+fi
+
+commit "$COMMIT_MSG" "$DO_ALL"
+
+
+

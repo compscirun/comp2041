@@ -1,0 +1,152 @@
+#!/bin/dash
+
+
+# pseudocode
+
+# filedata : "file|"$filepath"|"$ctime"|"$mtime"|"$filehash""
+#
+# for file in this directory
+#   get filedata
+#   get repo filedata (from last commit)
+#   get index filedata
+#   
+#   echo -n "$file - "
+#   if repo_filedata empty
+#       if index_filedata empty
+#           echo -n "untracked"
+#       else
+#           echo "added to index"
+#   else
+#       if index_filedata empty
+#   if filedata == index_filedata 
+#       if index_filedata == repo_filedata
+#
+#
+
+
+SCRIPT_DIR=$(dirname "$0")
+. "$SCRIPT_DIR/svc-helper.sh"
+
+INDEX=".svc/.reference/index"
+COMMIT_INDEX="./.svc/.reference/objects/commits/index"
+
+GLOBAL_INDEX=$(mktemp)
+REPO_INDEX=$(mktemp)
+if [ -f "$COMMIT_INDEX" ] && [ -s "$COMMIT_INDEX" ]; then
+    LAST_COMMIT_NUMBER=$(tail -n +2 "$COMMIT_INDEX" | wc -l)
+    cat "./.svc/.reference/objects/commits/$LAST_COMMIT_NUMBER" | tail -n +3 > "$REPO_INDEX"
+fi
+# cat "$REPO_INDEX"
+
+WORKSPACE_INDEX="$(mktemp)"
+
+
+while IFS='|' read -r type filedata; do
+
+    if [ "$type" = "file" ]; then
+        filepath=$(echo "$filedata" | cut -d'|' -f1)
+        INDEX_HASH=$(echo "$filedata" | cut -d'|' -f4)
+        if [ -f "$filepath" ]; then
+            WORKSPACE_HASH=$(hash_object "$filepath")
+        fi
+        REPO_HASH=$(grep "$filepath|" "$REPO_INDEX" | cut -d'|' -f5)
+        echo "${filepath}|${WORKSPACE_HASH}|${INDEX_HASH}|${REPO_HASH}" >> "$GLOBAL_INDEX"
+    fi 
+done < "$INDEX"
+
+for filepath in *; do
+    if [ -f "$filepath" ]; then
+        if ! grep -qF "$filepath|" "$GLOBAL_INDEX"; then
+            # no need to find index hash, if it existed then prev loop would have added it
+            REPO_HASH=$(grep "file|$filepath|" "$REPO_INDEX" | cut -d'|' -f5)
+            echo "${filepath}|${WORKSPACE_HASH}||${REPO_HASH}" >> "$GLOBAL_INDEX"
+        fi
+    fi
+done
+
+while IFS='|' read -r type filedata; do
+    if [ "$type" = "file" ]; then
+        filepath=$(echo "$filedata" | cut -d'|' -f1)
+        REPO_HASH=$(echo "$filedata" | cut -d'|' -f4)
+        if ! grep -qF "$filepath|" "$GLOBAL_INDEX"; then
+            # same logic here
+            echo "${filepath}|||${REPO_HASH}" >> "$GLOBAL_INDEX"
+        fi
+    fi 
+done < "$REPO_INDEX"
+
+
+while IFS='|' read -r filepath WORKSPACE_HASH INDEX_HASH REPO_HASH; do
+    echo -n "$filepath - "
+
+    if [ -z "$WORKSPACE_HASH" ]; then
+        if [ -z "$INDEX_HASH" ]; then
+            if [ -z "$REPO_HASH" ]; then
+                echo " what da helly"
+            else
+                echo "file deleted, deleted from index"
+            fi
+        else
+            if [ -z "$REPO_HASH" ]; then
+                echo "added to index, file deleted"
+            else
+                if [ "$REPO_HASH" = "$INDEX_HASH" ]; then
+                    echo "file deleted"
+                else
+                    echo "file deleted, changes staged for commit"
+                fi
+            fi
+        fi
+    else
+        if [ -z "$INDEX_HASH" ]; then
+            if [ -z "$REPO_HASH" ]; then
+                echo "untracked"
+            else
+                if [ "$WORKSPACE_HASH" = "$REPO_HASH" ]; then
+                    echo "deleted from index"
+                else
+                    echo "deleted from index"
+                fi
+            fi
+        else
+            if [ -z "$REPO_HASH" ]; then
+                if [ "$WORKSPACE_HASH" = "$INDEX_HASH" ]; then
+                    echo "added to index"
+                else
+                    echo "added to index, file changed"
+                fi
+            else
+                if [ "$WORKSPACE_HASH" = "$INDEX_HASH" ]; then
+                    if [ "$WORKSPACE_HASH" = "$REPO_HASH" ]; then
+                        echo "same as repo"
+                    else
+                        echo "file changed, changes staged for commit"
+                    fi
+                else
+                    if ["$WORKSPACE_HASH" = "$REPO_HASH" ]; then
+                        echo "file changed, different changes staged for commit"
+                    else
+                        echo "file changed, different changes staged for commit"
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+done < "$GLOBAL_INDEX"
+
+# 
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+    

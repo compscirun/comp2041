@@ -1,0 +1,47 @@
+#!/bin/dash
+ARG="$1"
+COMMIT=$(printf "%s" "$ARG" | cut -d':' -f1)
+FILENAME=$(printf "%s" "$ARG" | cut -d':' -f2)
+
+if [ -z "$COMMIT" ]; then
+    INDEX_FILE="./.svc/.reference/index"
+
+    if [ ! -f "$INDEX_FILE" ]; then
+        echo "svc-show: error: '$FILENAME' not found in index"
+        exit 1
+    fi
+
+    HASH=$(grep -F "file|$FILENAME|" "$INDEX_FILE" | cut -d'|' -f5)
+
+    if [ -z "$HASH" ]; then
+        echo "svc-show: error: '$FILENAME' not found in index"
+        exit 1
+    fi
+
+else
+    COMMIT_FILE="./.svc/.reference/objects/commits/$COMMIT"
+
+    if [ ! -f "$COMMIT_FILE" ]; then
+        echo "svc-show: error: unknown commit '$COMMIT'"
+        exit 1
+    fi
+
+    HASH=$(grep -F "file|$FILENAME|" "$COMMIT_FILE" | cut -d'|' -f5)
+
+    if [ -z "$HASH" ]; then
+        echo "svc-show: error: '$FILENAME' not found in commit $COMMIT"
+        exit 1
+    fi
+fi
+
+DIR=$(printf "%s" "$HASH" | cut -c 1-2)
+OBJ=$(printf "%s" "$HASH" | cut -c 3-)
+object_path="./.svc/.reference/objects/$DIR/$OBJ"
+
+if [ ! -f "$object_path" ]; then
+    echo "svc-show: error: object not found"
+    exit 1
+fi
+
+TMP=$(mktemp)
+zcat "$object_path"
